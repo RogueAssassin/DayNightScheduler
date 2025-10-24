@@ -3,23 +3,29 @@ using Oxide.Core;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using System.Linq;
 
 namespace Oxide.Plugins
 {
-    [Info("DayNightScheduler", "RogueAssassin", "1.5.0")]
-    [Description("Allows players to vote to skip the night with configurable settings")]
+    [Info("DayNightScheduler", "RogueAssassin", "1.7.0")]
+    [Description("Schedules and alters day/night cycle.")]
     public class DayNightScheduler : RustPlugin
     {
-        #region Configuration & Fields
+        #region Fields and Config
 
-        private Configuration config;
-        private bool isNight = false;
-        private float voteEndTime;
-        private HashSet<BasePlayer> votedPlayers = new HashSet<BasePlayer>();
-        private Dictionary<BasePlayer, float> playerVoteCooldowns = new Dictionary<BasePlayer, float>();
         private bool initialized = false;
-        private DateTime lastVoteTime;
+        private TOD_Time timeComponent;
+        private bool activatedDay = false;
+
+        // Configuration settings
+        private int DayLength;
+        private int NightLength;
+        private int AuthLevelCmds;
+        private int AuthLevelFreeze;
+        private bool AutoSkipNight;
+        private bool AutoSkipDay;
+        private bool LogAutoSkipConsole;
+        private bool FreezeTimeOnLoad;
+        private float TimeToFreeze;
 
         #endregion
 
@@ -27,24 +33,28 @@ namespace Oxide.Plugins
 
         public class Configuration
         {
-            public VersionNumber Version = new VersionNumber(1, 5, 0);
-            public int DayDurationMinutes = 20;
-            public int NightDurationMinutes = 10;
-            public float VoteCooldown = 30f;
-            public float VoteDuration = 60f;
-            public int RequiredVotes = 50; // Percentage of players needed to skip night
-            public bool EnableVoteToSkipNight = true;
+            public VersionNumber Version = new VersionNumber(1, 7, 0); // Version Number set
+            public int DayLength = 30;
+            public int NightLength = 30;
+            public int AuthLevelCmds = 1;
+            public int AuthLevelFreeze = 2;
             public bool AutoSkipNight = false;
+            public bool AutoSkipDay = false;
+            public bool LogAutoSkipConsole = true;
+            public bool FreezeTimeOnLoad = false;
+            public float TimeToFreeze = 12.0f;
         }
+
+        private Configuration config;
 
         #endregion
 
-        #region Config Handling
+        #region Oxide Hooks
 
         protected override void LoadDefaultConfig()
         {
             PrintWarning("Creating a new configuration file.");
-            config = new Configuration(); 
+            config = new Configuration();
             SaveConfig();
         }
 
@@ -55,12 +65,23 @@ namespace Oxide.Plugins
 
         private void LoadConfigValues()
         {
-            if (config.Version == null || config.Version < new VersionNumber(1, 5, 0))
+            if (config.Version == null || config.Version < new VersionNumber(1, 7, 0))
             {
                 PrintWarning("Old configuration detected, migrating...");
                 config.Version = new VersionNumber(1, 5, 0);
                 SaveConfig();
             }
+			
+            // Validate and load config values
+            DayLength = Mathf.Max(1, config.DayLength);
+            NightLength = Mathf.Max(1, config.NightLength);
+            AuthLevelCmds = config.AuthLevelCmds;
+            AuthLevelFreeze = config.AuthLevelFreeze;
+            AutoSkipNight = config.AutoSkipNight;
+            AutoSkipDay = config.AutoSkipDay;
+            LogAutoSkipConsole = config.LogAutoSkipConsole;
+            FreezeTimeOnLoad = config.FreezeTimeOnLoad;
+            TimeToFreeze = config.TimeToFreeze;
         }
 
         private void InitConfig()
@@ -76,115 +97,157 @@ namespace Oxide.Plugins
         void Loaded()
         {
             InitConfig();
-            LoadVariables();
+            RegisterPermissions();
+            OnServerInitialized();
         }
 
-        private void LoadVariables()
+        void Unload()
         {
-            // Assign config values to local variables
-            // (same as before, no changes needed here)
+            if (timeComponent == null || !initialized) return;
+            timeComponent.OnSunrise -= OnSunrise;
+            timeComponent.OnSunset -= OnSunset;
+            timeComponent.OnDay -= OnDay;
+            timeComponent.OnHour -= OnHour;
         }
-
-        #endregion
-
-        #region Oxide Hooks
 
         void OnServerInitialized()
         {
-            timer.Every(10f, CheckDayNightCycle);
+            if (TOD_Sky.Instance == null)
+            {
+                timer.Once(1, OnServerInitialized);
+                return;
+            }
+
+            timeComponent = TOD_Sky.Instance.Components.Time;
+            if (timeComponent == null)
+            {
+                PrintWarning("Could not fetch time component. Plugin disabled.");
+                return;
+            }
+
+            SetTimeComponent();
+
+            if (config.FreezeTimeOnLoad)
+                HandleTimeFreeze();
+
+            initialized = true;
         }
 
         #endregion
 
-        #region Time Management
+        #region Localization
 
-        private void CheckDayNightCycle()
+        protected override void LoadDefaultMessages()
         {
-            if (isNight && TimeOfDay() > config.NightDurationMinutes * 60f)
+            lang.RegisterMessages(new Dictionary<string, string>
             {
-                EndNight();
-            }
-            else if (!isNight && TimeOfDay() > config.DayDurationMinutes * 60f)
-            {
-                StartNight();
-            }
-
-            if (config.AutoSkipNight && isNight && TimeOfDay() > config.NightDurationMinutes * 60f)
-            {
-                EndNight();
-                SendChatMessage("Night has been skipped automatically.");
-            }
+                {"NoPermission", "You do not have permission to use this command."},
+                {"TimeFrozen", "The game time has been frozen."},
+                {"TimeUnfrozen", "The game time has been unfrozen."},
+                {"DayAlreadyActive", "Day is already active."},
+                {"NightAlreadyActive", "Night is already active."},
+                {"TodHeader", "-------- Time Of Day Settings --------"},
+                {"CurrentTimeOfDay", "Current Time: {0} hours"},
+                {"SunriseHour", "Sunrise Hour: {0}:{1:00}"},
+                {"SunsetHour", "Sunset Hour: {0}:{1:00}"},
+                {"DayLength", "Day Length: {0} minutes"},
+                {"NightLength", "Night Length: {0} minutes"},
+                {"HelpHeader", "-------- Available Commands --------"},
+                {"HelpTod", "/tod - Show current time and settings"},
+            }, this);
         }
 
-        private void StartNight()
-        {
-            isNight = true;
-            voteEndTime = Time.realtimeSinceStartup + config.VoteDuration;
-            SendChatMessage("Night has begun. You have " + config.VoteDuration + " seconds to vote to skip the night.");
-        }
-
-        private void EndNight()
-        {
-            isNight = false;
-            votedPlayers.Clear();
-            SendChatMessage("Night has ended.");
-        }
-
-        private void SendChatMessage(string message)
-        {
-            PrintToChat(message);
-        }
-
-        private float TimeOfDay()
-        {
-            return TOD_Sky.Instance.Cycle.Hour * 60f; // Time of day in minutes
-        }
+        private string GetMsg(string key, string userid = null) => lang.GetMessage(key, this, userid);
 
         #endregion
 
-        #region Voting System
+        #region Methods for Time Component
 
-        [ChatCommand("votenight")]
-        private void VoteToSkipNight(BasePlayer player, string command, string[] args)
+        private void SetTimeComponent()
         {
-            if (!config.EnableVoteToSkipNight) return;
+            timeComponent.ProgressTime = true;
+            timeComponent.UseTimeCurve = false;
+            timeComponent.OnSunrise += OnSunrise;
+            timeComponent.OnSunset += OnSunset;
+            timeComponent.OnDay += OnDay;
+            timeComponent.OnHour += OnHour;
+        }
 
-            if (isNight && Time.realtimeSinceStartup < voteEndTime)
+        private void HandleTimeFreeze()
+        {
+            if (!initialized) return;
+            timeComponent.ProgressTime = false;
+            ConVar.Env.time = TimeToFreeze;
+            LogDebug($"Time frozen to {TimeToFreeze} on load.");
+        }
+
+        private void SetCycle(bool isDaytime)
+        {
+            if (isDaytime)
             {
-                if (playerVoteCooldowns.ContainsKey(player) && Time.realtimeSinceStartup - playerVoteCooldowns[player] < config.VoteCooldown)
+                if (AutoSkipDay && !AutoSkipNight)
                 {
-                    SendChatMessage(player.displayName + ", you must wait before voting again.");
+                    TOD_Sky.Instance.Cycle.Hour = TOD_Sky.Instance.SunsetTime;
+                    LogAutoSkip("Daytime autoskipped");
+                    OnSunset();
                     return;
                 }
 
-                if (votedPlayers.Contains(player))
-                {
-                    SendChatMessage(player.displayName + ", you have already voted.");
-                    return;
-                }
-
-                votedPlayers.Add(player);
-                playerVoteCooldowns[player] = Time.realtimeSinceStartup;
-
-                int totalPlayers = covalence.Players.All.Count();
-                int votesNeeded = (int)(totalPlayers * (config.RequiredVotes / 100f));
-
-                SendChatMessage(player.displayName + " has voted to skip the night!");
-
-                if (votedPlayers.Count >= votesNeeded)
-                {
-                    EndNight();
-                    SendChatMessage("Night skipped. The server has moved to daytime!");
-                }
-            }
-            else if (!isNight)
-            {
-                SendChatMessage("It is not night time right now.");
+                timeComponent.DayLengthInMinutes = DayLength * (24.0f / (TOD_Sky.Instance.SunsetTime - TOD_Sky.Instance.SunriseTime));
+                if (!activatedDay)
+                    Interface.CallHook("OnTimeSunrise");
+                activatedDay = true;
             }
             else
             {
-                SendChatMessage("Voting time has ended for this night.");
+                if (AutoSkipNight)
+                {
+                    float timeToAdd = (24 - TOD_Sky.Instance.Cycle.Hour) + TOD_Sky.Instance.SunriseTime;
+                    TOD_Sky.Instance.Cycle.Hour += timeToAdd;
+                    LogAutoSkip("Nighttime autoskipped");
+                    OnSunrise();
+                    return;
+                }
+
+                timeComponent.DayLengthInMinutes = NightLength * (24.0f / (24.0f - (TOD_Sky.Instance.SunsetTime - TOD_Sky.Instance.SunriseTime)));
+                if (activatedDay)
+                    Interface.CallHook("OnTimeSunset");
+                activatedDay = false;
             }
+        }
+
+        private void OnDay()
+        {
+            if (!initialized) return;
+        }
+
+        private void OnHour()
+        {
+            if (!initialized) return;
+
+            if (IsDaytime() && !activatedDay)
+            {
+                SetCycle(true);
+                return;
+            }
+
+            if (!IsDaytime() && activatedDay)
+            {
+                SetCycle(false);
+                return;
+            }
+        }
+
+        private bool IsDaytime() => TOD_Sky.Instance.Cycle.Hour > TOD_Sky.Instance.SunriseTime && TOD_Sky.Instance.Cycle.Hour < TOD_Sky.Instance.SunsetTime;
+
+        private void OnSunrise()
+        {
+            SetCycle(true);
+        }
+
+        private void OnSunset()
+        {
+            SetCycle(false);
         }
 
         #endregion
@@ -193,10 +256,90 @@ namespace Oxide.Plugins
 
         private void RegisterPermissions()
         {
-            permission.RegisterPermission("daynightscheduler.vote", this);
+            permission.RegisterPermission("daynight.use", this);
         }
 
-        private bool HasPermission(BasePlayer player, string perm) => permission.UserHasPermission(player.UserIDString, perm);
+        private bool HasPermission(BasePlayer player) => permission.UserHasPermission(player.UserIDString, "daynight.use");
+
+        private bool CheckPermission(ConsoleSystem.Arg arg, int requiredLevel)
+        {
+            if (arg.Connection != null && arg.Connection.authLevel < requiredLevel)
+            {
+                SendReply(arg, GetMsg("NoPermission", arg.Connection.userid.ToString()));
+                return false;
+            }
+            return true;
+        }
+
+        #endregion
+
+        #region Console Commands
+
+        [ConsoleCommand("daynight.daylength")]
+        private void ConsoleDayLength(ConsoleSystem.Arg arg)
+        {
+            if (!initialized || !CheckPermission(arg, AuthLevelCmds)) return;
+
+            if (arg.Args == null || arg.Args.Length < 1)
+            {
+                SendReply(arg, $"Current 'dayLength' is {DayLength}");
+                return;
+            }
+
+            if (!int.TryParse(arg.Args[0], out int newDayLength) || newDayLength < 1)
+            {
+                SendReply(arg, "Invalid day length. Must be a number greater than 0.");
+                return;
+            }
+
+            DayLength = newDayLength;
+            config.DayLength = newDayLength;
+            SaveConfig();
+
+            SendReply(arg, $"Day length set to {DayLength} minutes.");
+            SetCycle(true);
+        }
+
+        [ConsoleCommand("daynight.nightlength")]
+        private void ConsoleNightLength(ConsoleSystem.Arg arg)
+        {
+            if (!initialized || !CheckPermission(arg, AuthLevelCmds)) return;
+
+            if (arg.Args == null || arg.Args.Length < 1)
+            {
+                SendReply(arg, $"Current 'nightLength' is {NightLength}");
+                return;
+            }
+
+            if (!int.TryParse(arg.Args[0], out int newNightLength) || newNightLength < 1)
+            {
+                SendReply(arg, "Invalid night length. Must be a number greater than 0.");
+                return;
+            }
+
+            NightLength = newNightLength;
+            config.NightLength = newNightLength;
+            SaveConfig();
+
+            SendReply(arg, $"Night length set to {NightLength} minutes.");
+            SetCycle(false);
+        }
+
+        #endregion
+
+        #region Logging
+
+        private void LogAutoSkip(string message)
+        {
+            if (LogAutoSkipConsole)
+                Puts(message);
+        }
+
+        private void LogDebug(string message)
+        {
+            if (config.LogAutoSkipConsole) // Enable detailed logging with the config setting
+                Puts(message);
+        }
 
         #endregion
     }
