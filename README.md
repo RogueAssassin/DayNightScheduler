@@ -1,120 +1,152 @@
-DayNightScheduler Plugin for Rust
+# DayNightScheduler
 
-A Rust plugin that allows players to vote to skip the night. Configurable settings for vote duration, cooldown, and percentage of players required to skip the night. Optionally, the night can be automatically skipped after a certain duration.
+### **Author:** RogueAssassin  
+### **Version:** 1.7.0
 
-Features
+The **DayNightScheduler** plugin for **Rust** allows server administrators to schedule and manipulate the in-game day/night cycle. With this plugin, you can configure the duration of day and night, skip day/night cycles automatically, freeze time on server load, and more.
 
-Vote to Skip Night: Players can vote to skip the night, with configurable settings.
+---
 
-Auto Skip Night: Optionally automatically skip the night after a set duration.
+## **Features**
 
-Cooldowns and Voting Limits: Players have a cooldown period between votes to prevent spamming.
+- **Customizable Day & Night Length:** Adjust the length of day and night in minutes.
+- **Automatic Day/Night Skipping:** Automatically skip night or day based on server settings.
+- **Time Freezing:** Option to freeze the time on server load.
+- **Permissions System:** Different levels of permission for various commands.
+- **Localization Support:** Easy translation to other languages via the `lang` system.
 
-Configurable Day and Night Durations: Set how long day and night last in minutes.
+---
 
-Permissions Support: Control who can vote with permissions.
+## **Configuration**
 
-Installation
+The plugin comes with a configurable JSON file. Here are the configurable options:
 
-Download the DayNightScheduler.cs file from this repository.
+| **Option**                | **Description**                                           | **Default Value** |
+|---------------------------|-----------------------------------------------------------|-------------------|
+| `DayLength`                | Length of day in minutes                                  | 30                |
+| `NightLength`              | Length of night in minutes                                | 30                |
+| `AuthLevelCmds`            | The required authorization level for `daynight.*` commands (0 = No permission, 1 = Moderator, 2 = Admin) | 1                 |
+| `AuthLevelFreeze`          | The required authorization level to use time freeze commands | 2                 |
+| `AutoSkipNight`            | Automatically skip night (only if `AutoSkipDay` is false) | false             |
+| `AutoSkipDay`              | Automatically skip day                                    | false             |
+| `LogAutoSkipConsole`       | Log auto-skip actions to console                          | true              |
+| `FreezeTimeOnLoad`         | Freeze the time when the server is loaded                 | false             |
+| `TimeToFreeze`             | The time in hours to freeze the game time on server load  | 12.0              |
 
-Place the DayNightScheduler.cs file in the oxide/plugins directory on your Rust server.
+---
 
-Restart or reload the server to load the plugin.
+## **Commands**
 
-Configuration
+### **Available Console Commands**
 
-The configuration is stored in a JSON file located in oxide/config/DayNightScheduler.json. On the first load, the plugin will create this file with default values.
+- `/tod`  
+  Displays the current time of day and other related settings.
 
-Configuration Options:
-{
-  "Version": "1.5.0",
-  "DayDurationMinutes": 20,
-  "NightDurationMinutes": 10,
-  "VoteCooldown": 30.0,
-  "VoteDuration": 60.0,
-  "RequiredVotes": 50,
-  "EnableVoteToSkipNight": true,
-  "AutoSkipNight": false
-}
+- `daynight.daylength <minutes>`  
+  Set the length of the day cycle in minutes.
 
+- `daynight.nightlength <minutes>`  
+  Set the length of the night cycle in minutes.
 
-Version: Plugin version.
+### **Permissions**
 
-DayDurationMinutes: The duration of the day in minutes (default: 20 minutes).
+- `daynight.use`  
+  Permission required to use the `/tod` command and interact with time settings.
 
-NightDurationMinutes: The duration of the night in minutes (default: 10 minutes).
+- `daynight.freeze`  
+  Permission to freeze/unfreeze the time in the game.
 
-VoteCooldown: Time (in seconds) players must wait before voting again (default: 30 seconds).
+---
 
-VoteDuration: Time (in seconds) players have to vote to skip the night (default: 60 seconds).
+## **Installation**
 
-RequiredVotes: The percentage of players required to vote to skip the night (default: 50%).
+1. **Download the Plugin:**  
+   Download the `DayNightScheduler` plugin file.
 
-EnableVoteToSkipNight: Whether voting to skip the night is enabled (default: true).
+2. **Place the Plugin:**  
+   Upload the `.cs` file to the **oxide/plugins** folder on your Rust server.
 
-AutoSkipNight: If enabled, the night will be skipped automatically after the set night duration (default: false).
+3. **Config File:**  
+   On the first load of the plugin, a configuration file will be generated in the **oxide/config** folder (`DayNightScheduler.json`).
 
-Commands
-/votenight
+4. **Reload Plugins:**  
+   Reload the plugin using the Oxide command:
+oxide.reload DayNightScheduler
 
-Usage: /votenight
+markdown
+Copy code
 
-Players can use this command to vote to skip the night.
+---
 
-Only available during the night phase, and voting lasts for the duration specified in the config (VoteDuration).
+## **Usage**
 
-Players can vote once per night, with a cooldown period between votes (VoteCooldown).
+### **Configuration**
 
-When the required percentage of votes is reached, the night will be skipped immediately.
+After installation, the plugin will automatically generate a configuration file (`DayNightScheduler.json`) in the **oxide/config** directory. You can customize the day and night length, time freezing settings, and other options through this file.
 
-Permissions
+- **Day/Night Length:** The default day and night lengths are 30 minutes each. You can change these to suit your server's needs by modifying `DayLength` and `NightLength` in the config file.
 
-daynightscheduler.vote: Grants permission to vote to skip the night. By default, this permission is available to all players, but you can configure it to be restricted.
+- **Auto-Skip:** Enable `AutoSkipDay` or `AutoSkipNight` to automatically skip either the day or night cycle based on server conditions.
 
-To assign this permission to a player, use the following command:
+- **Freeze Time on Load:** If `FreezeTimeOnLoad` is set to true, the time will freeze at the specified `TimeToFreeze` on server startup.
 
-oxide.grant user <player_name> daynightscheduler.vote
+### **Console Commands**
 
-Plugin Features
-1. Night Cycle Management
+You can use the following console commands to adjust the day and night lengths:
 
-Automatically handles day/night transitions based on configurable durations.
+- **Set Day Length:**
+daynight.daylength <minutes>
 
-Sends messages to players when the night begins, when the night ends, and when they vote to skip the night.
+pgsql
+Copy code
+Sets the day length (in minutes) to the value you specify.
 
-2. Voting System
+- **Set Night Length:**
+daynight.nightlength <minutes>
 
-Players can vote to skip the night by typing /votenight in the chat.
+yaml
+Copy code
+Sets the night length (in minutes) to the value you specify.
 
-Each player can vote only once per night, and there is a cooldown period (VoteCooldown) before they can vote again.
+### **Permissions**
 
-Voting ends after the specified duration (VoteDuration) or as soon as the required number of votes is reached.
+Permissions control who can execute certain commands:
 
-If enough votes are cast, the night is skipped, and the server transitions to day.
+- **`daynight.use`**: Allows the player to use the `/tod` command and view the current time settings.
+- **`daynight.freeze`**: Allows the player to freeze/unfreeze the time.
 
-3. Auto Skip Night (Optional)
+You can manage these permissions through the Oxide permission system.
 
-If enabled, the server will automatically skip the night after the specified duration (NightDurationMinutes), without needing any votes.
+---
 
-Troubleshooting
+## **Logging**
 
-Voting Not Working: Ensure the server time is correctly synced, and players are trying to vote during the night phase.
+The plugin supports logging of automatic day/night skips and time freezes to the server console. You can toggle this feature with the `LogAutoSkipConsole` setting in the configuration file.
 
-Permissions Issues: Ensure the daynightscheduler.vote permission is correctly assigned to players.
+---
 
-Night Not Skipping Automatically: Make sure the AutoSkipNight option is enabled in the config and that the night duration is set correctly.
+## **Changelog**
 
-Version History
-v1.5.0
+### **Version 1.7.0 (Current Version)**
+- Initial release with full day/night cycle management, time freezing, and auto-skip options.
 
-Initial release with configurable day/night cycle, voting system, and cooldowns.
+---
 
-Credits
+## **Troubleshooting**
 
-Developer: RogueAssassin
+1. **Time Not Updating:**  
+ Ensure that the plugin has successfully loaded and that the `TOD_Sky` component is present in the game.
 
-License
+2. **Permissions Issues:**  
+ Ensure you have the correct permissions set for the commands you wish to use.
 
-This project is licensed under the MIT License - see the LICENSE
- file for details.
+3. **Auto-Skip Not Working:**  
+ Double-check that both `AutoSkipDay` and `AutoSkipNight` are configured as desired in the configuration file.
+
+---
+
+## **License**
+
+This plugin is licensed under the **MIT License**. Feel free to modify and distribute it as long as you adhere to the terms of the license.
+
+---
