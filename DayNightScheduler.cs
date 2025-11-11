@@ -3,10 +3,11 @@ using Oxide.Core;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Newtonsoft.Json;
 
 namespace Oxide.Plugins
 {
-    [Info("DayNightScheduler", "RogueAssassin", "1.7.0")]
+    [Info("DayNightScheduler", "RogueAssassin", "2.0.0")]
     [Description("Schedules and alters day/night cycle.")]
     public class DayNightScheduler : RustPlugin
     {
@@ -26,77 +27,93 @@ namespace Oxide.Plugins
         private bool LogAutoSkipConsole;
         private bool FreezeTimeOnLoad;
         private float TimeToFreeze;
+        private string LogLevel;
 
         #endregion
 
-        #region Configuration Class
+        #region Config Class and Versioning
 
-        public class Configuration
+        // Define the ConfigData class with versioning
+        private class ConfigData
         {
-            public VersionNumber Version = new VersionNumber(1, 7, 0); // Version Number set
-            public int DayLength = 30;
-            public int NightLength = 30;
-            public int AuthLevelCmds = 1;
-            public int AuthLevelFreeze = 2;
-            public bool AutoSkipNight = false;
-            public bool AutoSkipDay = false;
-            public bool LogAutoSkipConsole = true;
-            public bool FreezeTimeOnLoad = false;
-            public float TimeToFreeze = 12.0f;
+            [JsonProperty(PropertyName = "Version (DO NOT CHANGE)", Order = int.MaxValue)] public VersionNumber Version = new VersionNumber(2, 0, 0); // Plugin version
+            [JsonProperty(PropertyName = "DayLength (Length of the day in in-game minutes)")]  public int DayLength = 30;
+            [JsonProperty(PropertyName = "NightLength (Length of the night in in-game minutes)")] public int NightLength = 30;
+            [JsonProperty(PropertyName = "AuthLevelCmds (Minimum auth level required to run admin commands)")] public int AuthLevelCmds = 1;
+            [JsonProperty(PropertyName = "AuthLevelFreeze (Minimum auth level required to freeze/manipulate time)")] public int AuthLevelFreeze = 2;
+            [JsonProperty(PropertyName = "AutoSkipNight (Automatically skip the night when enabled)")] public bool AutoSkipNight = false;
+            [JsonProperty(PropertyName = "AutoSkipDay (Automatically skip the day when enabled)")] public bool AutoSkipDay = false;
+            [JsonProperty(PropertyName = "LogAutoSkipConsole (Log auto-skip events to the console)")] public bool LogAutoSkipConsole = true;
+            [JsonProperty(PropertyName = "FreezeTimeOnLoad (Freeze the game time immediately when the plugin loads)")] public bool FreezeTimeOnLoad = false;
+            [JsonProperty(PropertyName = "TimeToFreeze (Hour to freeze time at, if freezing is enabled)")] public float TimeToFreeze = 12.0f;
+            [JsonProperty(PropertyName = "LogLevel (Logging verbosity: Info, Warning, Error, Debug)")] public string LogLevel = "Info";
         }
 
-        private Configuration config;
+        private ConfigData _config;
+
+        #endregion
+
+        #region Configuration Methods
+
+        protected override void LoadDefaultConfig()
+        {
+            _config = new ConfigData();
+            SaveConfig();
+        }
+
+        protected override void LoadConfig()
+        {
+            base.LoadConfig();
+            _config = Config.ReadObject<ConfigData>();
+            if (_config == null)
+            {
+                _config = new ConfigData();
+                SaveConfig();
+            }
+            else if (_config.Version < new VersionNumber(2, 0, 0)) // Check for older versions
+            {
+                MigrateConfig();
+                SaveConfig();
+            }
+
+            LoadConfigValues();
+        }
+
+        private void MigrateConfig()
+        {
+            PrintWarning("Outdated config detected. Updating...");
+            _config.Version = new VersionNumber(2, 0, 0); // Update version number
+
+            // Additional migration logic if necessary
+            // For example, if the config format changes, we could handle that here
+        }
+
+        protected override void SaveConfig()
+        {
+            Config.WriteObject(_config, true);
+        }
+
+        private void LoadConfigValues()
+        {
+            // Load values from the config
+            DayLength = Mathf.Max(1, _config.DayLength);
+            NightLength = Mathf.Max(1, _config.NightLength);
+            AuthLevelCmds = _config.AuthLevelCmds;
+            AuthLevelFreeze = _config.AuthLevelFreeze;
+            AutoSkipNight = _config.AutoSkipNight;
+            AutoSkipDay = _config.AutoSkipDay;
+            LogAutoSkipConsole = _config.LogAutoSkipConsole;
+            FreezeTimeOnLoad = _config.FreezeTimeOnLoad;
+            TimeToFreeze = _config.TimeToFreeze;
+            LogLevel = _config.LogLevel.ToLower(); // Ensure log level is lowercase for consistency
+        }
 
         #endregion
 
         #region Oxide Hooks
 
-        protected override void LoadDefaultConfig()
-        {
-            PrintWarning("Creating a new configuration file.");
-            config = new Configuration();
-            SaveConfig();
-        }
-
-        private void SaveConfig()
-        {
-            Config.WriteObject(config, true);
-        }
-
-        private void LoadConfigValues()
-        {
-            if (config.Version == null || config.Version < new VersionNumber(1, 7, 0))
-            {
-                PrintWarning("Old configuration detected, migrating...");
-                config.Version = new VersionNumber(1, 5, 0);
-                SaveConfig();
-            }
-			
-            // Validate and load config values
-            DayLength = Mathf.Max(1, config.DayLength);
-            NightLength = Mathf.Max(1, config.NightLength);
-            AuthLevelCmds = config.AuthLevelCmds;
-            AuthLevelFreeze = config.AuthLevelFreeze;
-            AutoSkipNight = config.AutoSkipNight;
-            AutoSkipDay = config.AutoSkipDay;
-            LogAutoSkipConsole = config.LogAutoSkipConsole;
-            FreezeTimeOnLoad = config.FreezeTimeOnLoad;
-            TimeToFreeze = config.TimeToFreeze;
-        }
-
-        private void InitConfig()
-        {
-            config = Config.ReadObject<Configuration>();
-            if (config == null)
-            {
-                LoadDefaultConfig();
-            }
-            LoadConfigValues();
-        }
-
         void Loaded()
         {
-            InitConfig();
             RegisterPermissions();
             OnServerInitialized();
         }
@@ -127,7 +144,7 @@ namespace Oxide.Plugins
 
             SetTimeComponent();
 
-            if (config.FreezeTimeOnLoad)
+            if (FreezeTimeOnLoad)
                 HandleTimeFreeze();
 
             initialized = true;
@@ -154,6 +171,10 @@ namespace Oxide.Plugins
                 {"NightLength", "Night Length: {0} minutes"},
                 {"HelpHeader", "-------- Available Commands --------"},
                 {"HelpTod", "/tod - Show current time and settings"},
+                {"HelpSetDayLength", "/daynight.daylength <minutes> - Set the day length"},
+                {"HelpSetNightLength", "/daynight.nightlength <minutes> - Set the night length"},
+                {"HelpFreeze", "/tod freeze - Freeze the time at the current point"},
+                {"HelpUnfreeze", "/tod unfreeze - Unfreeze the time and resume the cycle" }
             }, this);
         }
 
@@ -261,11 +282,11 @@ namespace Oxide.Plugins
 
         private bool HasPermission(BasePlayer player) => permission.UserHasPermission(player.UserIDString, "daynight.use");
 
-        private bool CheckPermission(ConsoleSystem.Arg arg, int requiredLevel)
+        private bool CheckPermission(BasePlayer player, int requiredLevel)
         {
-            if (arg.Connection != null && arg.Connection.authLevel < requiredLevel)
+            if (player != null && player.Connection.authLevel < requiredLevel)
             {
-                SendReply(arg, GetMsg("NoPermission", arg.Connection.userid.ToString()));
+                SendReply(player, GetMsg("NoPermission", player.UserIDString));
                 return false;
             }
             return true;
@@ -273,61 +294,93 @@ namespace Oxide.Plugins
 
         #endregion
 
-        #region Console Commands
+        #region Commands
+
+        [ChatCommand("tod")]
+        private void Command_Tod(BasePlayer player, string command, string[] args)
+        {
+            string timeDisplay = GetTimeDisplay(TOD_Sky.Instance.Cycle.Hour);
+            SendReply(player, $"{GetMsg("TodHeader")}\n{GetMsg("CurrentTimeOfDay", player.UserIDString)} {timeDisplay}");
+        }
+
+        [ConsoleCommand("tod")]
+        private void ConsoleCommand_Tod(ConsoleSystem.Arg args)
+        {
+            string timeDisplay = GetTimeDisplay(TOD_Sky.Instance.Cycle.Hour);
+            Puts($"{GetMsg("TodHeader")}\n{GetMsg("CurrentTimeOfDay", null)} {timeDisplay}");
+        }
+
+        [ChatCommand("daynight.daylength")]
+        private void Command_SetDayLength(BasePlayer player, string command, string[] args)
+        {
+            if (!HasPermission(player)) return;
+            if (args.Length == 0 || !int.TryParse(args[0], out int length)) return;
+            _config.DayLength = Mathf.Max(1, length);
+            SaveConfig();
+            SendReply(player, $"Day length set to {_config.DayLength} minutes.");
+        }
 
         [ConsoleCommand("daynight.daylength")]
-        private void ConsoleDayLength(ConsoleSystem.Arg arg)
+        private void ConsoleCommand_SetDayLength(ConsoleSystem.Arg args)
         {
-            if (!initialized || !CheckPermission(arg, AuthLevelCmds)) return;
-
-            if (arg.Args == null || arg.Args.Length < 1)
-            {
-                SendReply(arg, $"Current 'dayLength' is {DayLength}");
-                return;
-            }
-
-            if (!int.TryParse(arg.Args[0], out int newDayLength) || newDayLength < 1)
-            {
-                SendReply(arg, "Invalid day length. Must be a number greater than 0.");
-                return;
-            }
-
-            DayLength = newDayLength;
-            config.DayLength = newDayLength;
+            if (args.Args.Length == 0 || !int.TryParse(args.GetString(0), out int length)) return;
+            _config.DayLength = Mathf.Max(1, length);
             SaveConfig();
+            Puts($"Day length set to {_config.DayLength} minutes.");
+        }
 
-            SendReply(arg, $"Day length set to {DayLength} minutes.");
-            SetCycle(true);
+        [ChatCommand("daynight.nightlength")]
+        private void Command_SetNightLength(BasePlayer player, string command, string[] args)
+        {
+            if (!HasPermission(player)) return;
+            if (args.Length == 0 || !int.TryParse(args[0], out int length)) return;
+            _config.NightLength = Mathf.Max(1, length);
+            SaveConfig();
+            SendReply(player, $"Night length set to {_config.NightLength} minutes.");
         }
 
         [ConsoleCommand("daynight.nightlength")]
-        private void ConsoleNightLength(ConsoleSystem.Arg arg)
+        private void ConsoleCommand_SetNightLength(ConsoleSystem.Arg args)
         {
-            if (!initialized || !CheckPermission(arg, AuthLevelCmds)) return;
-
-            if (arg.Args == null || arg.Args.Length < 1)
-            {
-                SendReply(arg, $"Current 'nightLength' is {NightLength}");
-                return;
-            }
-
-            if (!int.TryParse(arg.Args[0], out int newNightLength) || newNightLength < 1)
-            {
-                SendReply(arg, "Invalid night length. Must be a number greater than 0.");
-                return;
-            }
-
-            NightLength = newNightLength;
-            config.NightLength = newNightLength;
+            if (args.Args.Length == 0 || !int.TryParse(args.GetString(0), out int length)) return;
+            _config.NightLength = Mathf.Max(1, length);
             SaveConfig();
+            Puts($"Night length set to {_config.NightLength} minutes.");
+        }
 
-            SendReply(arg, $"Night length set to {NightLength} minutes.");
-            SetCycle(false);
+        [ChatCommand("tod.freeze")]
+        private void Command_FreezeTime(BasePlayer player, string command, string[] args)
+        {
+            if (!CheckPermission(player, AuthLevelFreeze)) return;
+            timeComponent.ProgressTime = false;
+            SendReply(player, GetMsg("TimeFrozen"));
+        }
+
+        [ConsoleCommand("tod.freeze")]
+        private void ConsoleCommand_FreezeTime(ConsoleSystem.Arg args)
+        {
+            timeComponent.ProgressTime = false;
+            Puts(GetMsg("TimeFrozen"));
+        }
+
+        [ChatCommand("tod.unfreeze")]
+        private void Command_UnfreezeTime(BasePlayer player, string command, string[] args)
+        {
+            if (!CheckPermission(player, AuthLevelFreeze)) return;
+            timeComponent.ProgressTime = true;
+            SendReply(player, GetMsg("TimeUnfrozen"));
+        }
+
+        [ConsoleCommand("tod.unfreeze")]
+        private void ConsoleCommand_UnfreezeTime(ConsoleSystem.Arg args)
+        {
+            timeComponent.ProgressTime = true;
+            Puts(GetMsg("TimeUnfrozen"));
         }
 
         #endregion
 
-        #region Logging
+        #region Helper Methods
 
         private void LogAutoSkip(string message)
         {
@@ -335,10 +388,47 @@ namespace Oxide.Plugins
                 Puts(message);
         }
 
+        private string GetTimeDisplay(float hour)
+        {
+            int hours = Mathf.FloorToInt(hour);
+            int minutes = Mathf.FloorToInt((hour - hours) * 60);
+            return $"{hours} hours {minutes} minutes"; // Always show hours and minutes
+        }
+
+        #endregion
+
+        #region Logging
+
         private void LogDebug(string message)
         {
-            if (config.LogAutoSkipConsole) // Enable detailed logging with the config setting
+            if (ShouldLog("debug"))
                 Puts(message);
+        }
+
+        private void LogInfo(string message)
+        {
+            if (ShouldLog("info"))
+                Puts(message);
+        }
+
+        private void LogWarning(string message)
+        {
+            if (ShouldLog("warning"))
+                Puts(message);
+        }
+
+        private void LogError(string message)
+        {
+            if (ShouldLog("error"))
+                Puts(message);
+        }
+
+        private bool ShouldLog(string level)
+        {
+            var levels = new[] { "error", "warning", "info", "debug" };
+            int currentLevel = Array.IndexOf(levels, LogLevel);
+            int checkLevel = Array.IndexOf(levels, level);
+            return checkLevel <= currentLevel;
         }
 
         #endregion
